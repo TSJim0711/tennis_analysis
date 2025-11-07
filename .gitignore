@@ -1,0 +1,7 @@
+input_videos/*
+output_videos/*
+
+# running cache
+**/__pycache__/
+.idea/
+tracker_stubs/

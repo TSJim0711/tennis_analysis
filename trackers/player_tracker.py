@@ -11,11 +11,16 @@ class PlayerTracker:
 
     def choose_and_filter_players(self, court_keypoints, player_detections):
         player_detections_first_frame = player_detections[0]
-        chosen_player = self.choose_players(court_keypoints, player_detections_first_frame)
+        chosen_player = self.choose_players(court_keypoints, player_detections_first_frame) # 通过计算所有帧中的player 和 场地点的位置关系, 选择xxx距离最小的
         filtered_player_detections = []
         for player_dict in player_detections:
             filtered_player_dict = {track_id: bbox for track_id, bbox in player_dict.items() if track_id in chosen_player}
-            filtered_player_detections.append(filtered_player_dict)
+            #增加了下面代码 新建了一个字典filtered_player_dict_tmp, 重新将filtered_player_dict的两个key变成 player的1 和2 , 因为后面的代码都是
+            filtered_player_dict_tmp={1: [],2:[]}
+            filtered_player_dict_tmp[1]= filtered_player_dict[chosen_player[0]]
+            filtered_player_dict_tmp[2] = filtered_player_dict[chosen_player[1]]
+            #增加代码end
+            filtered_player_detections.append(filtered_player_dict_tmp)
         return filtered_player_detections
 
     def choose_players(self, court_keypoints, player_dict):
