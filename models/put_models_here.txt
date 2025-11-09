@@ -1,0 +1,4 @@
+These file should be placed:
+keypoints_model.pth
+yolo5_last.pt
+yolov8x.pt
