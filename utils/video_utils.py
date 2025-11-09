@@ -1,15 +1,10 @@
 import cv2
 
-def read_video(video_path):
-    cap = cv2.VideoCapture(video_path)
-    frames = []
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frames.append(frame)
-    cap.release()
-    return frames
+def read_img(img_path):
+    img = cv2.imread(img_path)
+    imgArr= [img]
+    return imgArr
+
 
 def save_video(output_video_frames, output_video_path):
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')

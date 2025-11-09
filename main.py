@@ -1,4 +1,4 @@
-from utils import (read_video,
+from utils import (read_img,
                    save_video,
                    measure_distance,
                    draw_player_stats,
@@ -16,7 +16,7 @@ def main():
     # 读取视频文件，确保输入视频在 input_videos 文件夹下
     input_video_path = "input_videos/feder6s.mp4"
     #mmexport1723797525791  wu_mei9s    input_video wu1920
-    video_frames = read_video(input_video_path)
+    video_frames = read_img(input_video_path)
 
     # 初始化球员和网球的检测追踪器
     # 确保模型文件在 models 文件夹下
