@@ -37,6 +37,13 @@ class CourtLineDetector:
             y = int(keypoints[i+1])
             cv2.putText(image, str(i//2), (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
             cv2.circle(image, (x, y), 5, (0, 0, 255), -1)
+            # draw lines
+            if (i/2%2==0):
+                xPrev=x
+                yPrev=y
+            else:
+                cv2.line(image, (x, y), (xPrev,yPrev), (0, 100, 255), 3)
+
         return image
     
     def draw_keypoints_on_video(self, video_frames, keypoints):
