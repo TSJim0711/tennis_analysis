@@ -43,12 +43,4 @@ class CourtLineDetector:
                 yPrev=y
             else:
                 cv2.line(image, (x, y), (xPrev,yPrev), (0, 100, 255), 3)
-
         return image
-    
-    def draw_keypoints_on_video(self, video_frames, keypoints):
-        output_video_frames = []
-        for frame in video_frames:
-            frame = self.draw_keypoints(frame, keypoints)
-            output_video_frames.append(frame)
-        return output_video_frames
