@@ -8,7 +8,7 @@ class CourtLineDetector:
     def __init__(self, model_path):
         self.model = models.resnet50(pretrained=True)
         self.model.fc = torch.nn.Linear(self.model.fc.in_features, 14*2) 
-        self.model.load_state_dict(torch.load(model_path, map_location='cpu'))
+        self.model.load_state_dict(torch.load(model_path, map_location='cpu', weights_only=True))
         self.transform = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((224, 224)),
