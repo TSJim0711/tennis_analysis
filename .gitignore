@@ -1,6 +1,6 @@
 input_videos/*
 output_videos/*
-!output_videos/output.avi
+!output_videos/output_video.avi
 
 # running cache
 **/__pycache__/

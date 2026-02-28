@@ -81,6 +81,7 @@ class BallTracker:
 
         return frame_nums_with_ball_hits
 
+    frame_mid_pos=[0,0,0,0]#the mid point of the video frame, this is globe var, var given by detect_frames, would be used in detect_frames & detect_ball
     def detect_frames(self,frames, read_from_stub=False, stub_path=None):
         ball_detections = []
 
@@ -93,86 +94,94 @@ class BallTracker:
             player_dict = self.detect_frame(frame)
             ball_detections.append(player_dict)
 
-        fix_itm_flag=0
         history = {}#data from history frames
         blacklist_areas = []#静止物品的区域
-        last_ball_pos=None#default ball in mid of frame
         ball_pos_log= []
-        last_ball_pos = [len(frames[0]) / 2, len(frames) / 2, len(frames[0]) / 2, len(frames) / 2]
         max_fixed_itm_radius=10#静止物品相对摄像头的最大浮动像素范围
         max_fixed_itm_track_frame=30
+        self.frame_mid_pos=[len(frames[0]) / 2, len(frames) / 2, len(frames[0]) / 2, len(frames) / 2]
         for frame_num, ball_dict in enumerate(ball_detections):
-            potential_boxes = ball_dict.get(1, [])#get all box
-            potential_boxes_sorted=[]
-            if not potential_boxes:
-                ball_pos_log.append({1: []})
-                continue#no box, skip
-            chosen_box = None
-            #sort box
-            min_dist = float('inf')
-            for box in potential_boxes:
-                #remove box don't move (aka box in banned area)
-                x1, y1, x2, y2, conf = box
-                center = ((x1 + x2) / 2, (y1 + y2) / 2)
-                for bad_center in blacklist_areas:
-                    dist = np.linalg.norm(np.array(center) - np.array(bad_center))#cal dist from cur box to nearest blacklist center
-                    if dist < max_fixed_itm_radius:
-                        fix_itm_flag=1#mark as fix item (not moving)
-                        break#skip for bad_center in blacklist_areas:
-
-                if fix_itm_flag==1:#fix item, not ball
-                    fix_itm_flag=0
-                    continue
-
-                #find cid nearest to cur box
-                matched_id = None
-                for cid, points in history.items():
-                    last_point = points[-1]
-                    dist = np.linalg.norm(np.array(center) - np.array(last_point))
-                    if dist < max_fixed_itm_radius:
-                        matched_id = cid
-                        break
-
-                #not in any blacklist, handle it
-                if matched_id is None:
-                    matched_id = len(history)
-                    history[matched_id] = deque(maxlen=max_fixed_itm_track_frame)#create slot for new obj,only keep latest 30 data
-
-                #add box pos to cid history
-                history[matched_id].append(center)
-
-                #obj reach 30 data, start cal
-                if len(history[matched_id]) >= max_fixed_itm_track_frame:
-                    start_pt = np.array(history[matched_id][0])#load data from start
-                    end_pt = np.array(history[matched_id][-1])#to end
-                    total_movement = np.linalg.norm(end_pt - start_pt)#cal obj move pixel in 1sec, OGLD dist
-                    if total_movement < max_fixed_itm_radius:
-                        #not moving! not ball! ban!
-                        blacklist_areas.append(center)
-                        del history[matched_id]
-                        continue#handle other box in potential_boxes now
-
-                potential_boxes_sorted.append(box)#more possible box with ball after cal
-
-            #box nearest to last box(is ball) is ball
-            ball_box=None
-            for box in potential_boxes_sorted:
-                x1, y1, x2, y2, conf = box
-                xx1, yy1, xx2, yy2 = last_ball_pos
-                box_center = np.array([(x1 + x2) / 2, (y1 + y2) / 2])
-                last_ball_center = np.array([(xx1 + xx2) / 2, (yy1 + yy2) / 2])
-                dist = np.linalg.norm(box_center - last_ball_center)
-                if dist < min_dist:
-                    min_dist = dist
-                    ball_box = box
-
-            current_frame_dict = {1: []}
-            if ball_box is not None:
-                last_ball_pos = ball_box[:4]#drop conf
-                current_frame_dict[1] = ball_box[:4]
-            ball_pos_log.append(current_frame_dict)
-
+            ball_pos_log.append(self.detect_ball(frame_num, ball_dict, blacklist_areas, history, ball_pos_log if len(ball_pos_log)>0 else [{1:self.frame_mid_pos}], max_fixed_itm_radius, max_fixed_itm_track_frame))
         return ball_pos_log
+
+    def detect_ball(self,frame_num, ball_dict, blacklist_areas, history, ball_pos_log, max_fixed_itm_radius, max_fixed_itm_track_frame):
+        fix_itm_flag = 0
+        potential_boxes = ball_dict.get(1, [])  # get all box
+        potential_boxes_sorted = []
+        if not potential_boxes:
+            return {1: []}
+        chosen_box = None
+        # sort box
+        min_dist = float('inf')
+        for box in potential_boxes:
+            # remove box don't move (aka box in banned area)
+            x1, y1, x2, y2, conf = box
+            center = ((x1 + x2) / 2, (y1 + y2) / 2)
+            for bad_center in blacklist_areas:
+                dist = np.linalg.norm(np.array(center) - np.array(bad_center))  # cal dist from cur box to nearest blacklist center
+                if dist < max_fixed_itm_radius:
+                    fix_itm_flag = 1  # mark as fix item (not moving)
+                    break  # skip for bad_center in blacklist_areas:
+
+            if fix_itm_flag == 1:  # fix item, not ball
+                fix_itm_flag = 0
+                continue
+
+            # find cid nearest to cur box
+            matched_id = None
+            for cid, points in history.items():
+                last_point = points[-1]
+                dist = np.linalg.norm(np.array(center) - np.array(last_point))
+                if dist < max_fixed_itm_radius:
+                    matched_id = cid
+                    break
+
+            # not in any blacklist, handle it
+            if matched_id is None:
+                matched_id = len(history)
+                history[matched_id] = deque(maxlen=max_fixed_itm_track_frame)  # create slot for new obj,only keep latest 30 data
+
+            # add box pos to cid history
+            history[matched_id].append(center)
+
+            # obj reach 30 data, start cal
+            if len(history[matched_id]) >= max_fixed_itm_track_frame:
+                start_pt = np.array(history[matched_id][0])  # load data from start
+                end_pt = np.array(history[matched_id][-1])  # to end
+                total_movement = np.linalg.norm(end_pt - start_pt)  # cal obj move pixel in 1sec, OGLD dist
+                if total_movement < max_fixed_itm_radius:
+                    # not moving! not ball! ban now!
+                    blacklist_areas.append(center)
+                    del history[matched_id]
+                    #re-determine latest 30(or ball_pos_log len if it's smaller) frame ball box, according to new ban rule
+                    for frame_ptr in range(-min(max_fixed_itm_track_frame, len(ball_pos_log)),-1,1):
+                        ball_pos_log[frame_ptr]=self.detect_ball(frame_ptr, ball_dict, blacklist_areas, history, ball_pos_log if len(ball_pos_log)>0 else [{1:self.frame_mid_pos}], max_fixed_itm_radius, max_fixed_itm_track_frame)
+                    continue  # handle other box in potential_boxes now
+
+            potential_boxes_sorted.append(box)  # more possible box with ball after cal
+
+        # box nearest to last box(is ball) is ball
+        ball_box = None
+        for box in potential_boxes_sorted:
+            x1, y1, x2, y2, conf = box
+
+            for last_ball_pos in reversed(ball_pos_log[:frame_num]):#if last frame found no ball box, get it from more early frames
+                if last_ball_pos[1]!=[]:
+                    xx1, yy1, xx2, yy2 = last_ball_pos[1]
+            else :#no valid box from start to end, set value as frame middle pos.
+                xx1, yy1, xx2, yy2 = self.frame_mid_pos
+
+            box_center = np.array([(x1 + x2) / 2, (y1 + y2) / 2])
+            last_ball_center = np.array([(xx1 + xx2) / 2, (yy1 + yy2) / 2])
+            dist = np.linalg.norm(box_center - last_ball_center)
+            if dist < min_dist:
+                min_dist = dist
+                ball_box = box
+
+        current_frame_dict = {1: []}
+        if ball_box is not None:
+            current_frame_dict[1] = ball_box[:4]
+        return current_frame_dict
 
     def detect_frame(self,frame):
         results = self.model.predict(frame,conf=0.15)[0]
@@ -217,4 +226,3 @@ class BallTracker:
                 cv2.putText(cur_frame,"The ball bounced.",(10,620),cv2.FONT_HERSHEY_SIMPLEX, 1.5,(0, 0, 255),3)
             output_video_frames.append(cur_frame)
         return output_video_frames
-
