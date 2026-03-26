@@ -41,7 +41,7 @@ def main():
     # 绘制输出视频
     output_video_frames  = court_line_detector.draw_keypoints_on_video(video_frames, court_keypoints)
     ## 绘制网球检测框
-    output_video_frames= ball_tracker.draw_bboxes(output_video_frames, ball_detections)
+    output_video_frames= ball_tracker.draw_bboxes(output_video_frames, df_ball_positions)
     ##print ball bounce/hit to video
     output_video_frames = ball_tracker.print_ball_hit_log(output_video_frames,ball_bounce_frame)
     # 保存输出视频到 output_videos 文件夹

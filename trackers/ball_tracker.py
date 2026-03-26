@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass
 from scipy.signal import argrelextrema
-from collections import deque
+import queue
 
 class BallTracker:
     def __init__(self,model_path):
@@ -22,30 +22,25 @@ class BallTracker:
                 processed_positions.append([])
                 continue
 
-            if isinstance(frame_detections, dict):
-                if len(frame_detections) > 0:
-                    # 取字典里的第一个值作为球的位置
-                    data = list(frame_detections.values())[0]
-                else:
-                    data = []
-            else:
-                data = frame_detections
+            x1,y1,x2,y2,conf=frame_detections
+            processed_positions.append([x1,y1,x2,y2,conf])
 
-            processed_positions.append(data)
         print(processed_positions)
         # convert the list into pandas dataframe
-        df_ball_positions = pd.DataFrame(processed_positions,columns=['x1','y1','x2','y2'])
+        df_ball_positions = pd.DataFrame(processed_positions,columns=['x1','y1','x2','y2','conf'])
 
         # interpolate the missing values
         df_ball_positions = df_ball_positions.interpolate()
         df_ball_positions = df_ball_positions.bfill()
 
-        #take 2 frame right&left and cal current pos. ai suggest Savitzky-Golay but I can't understand, byebye~
-        df_ball_positions['x1'] = df_ball_positions['x1'].rolling(window=2, min_periods=1, center=True).mean()
-        df_ball_positions['y1'] = df_ball_positions['y1'].rolling(window=2, min_periods=1, center=True).mean()
-        df_ball_positions['x2'] = df_ball_positions['x2'].rolling(window=2, min_periods=1, center=True).mean()
-        df_ball_positions['y2'] = df_ball_positions['y2'].rolling(window=2, min_periods=1, center=True).mean()
+        #take 3 frame right&left and cal current pos. ai suggest Savitzky-Golay but I can't understand, byebye~
+        df_ball_positions['x1'] = df_ball_positions['x1'].rolling(window=3, min_periods=1, center=True).mean()
+        df_ball_positions['y1'] = df_ball_positions['y1'].rolling(window=3, min_periods=1, center=True).mean()
+        df_ball_positions['x2'] = df_ball_positions['x2'].rolling(window=3, min_periods=1, center=True).mean()
+        df_ball_positions['y2'] = df_ball_positions['y2'].rolling(window=3, min_periods=1, center=True).mean()
 
+        print("df_ball_positions")
+        print(df_ball_positions)
         return df_ball_positions
 
     def get_ball_shot_frames(self,ball_positions):
@@ -81,7 +76,6 @@ class BallTracker:
 
         return frame_nums_with_ball_hits
 
-    frame_mid_pos=[0,0,0,0]#the mid point of the video frame, this is globe var, var given by detect_frames, would be used in detect_frames & detect_ball
     def detect_frames(self,frames, read_from_stub=False, stub_path=None):
         ball_detections = []
 
@@ -90,98 +84,52 @@ class BallTracker:
                 ball_detections = pickle.load(f)
             return ball_detections
 
-        for frame in frames:
-            player_dict = self.detect_frame(frame)
-            ball_detections.append(player_dict)
+        box_queue = queue.Queue()
+        frame_y,frame_x,channel= frames[0].shape
+        heat_map=np.zeros((frame_y+1,frame_x+1),dtype=float)#create 720*480(if is) np list filled with 0; it start from 0, and I don't want to -1 every call
+        for frame_no, frame in enumerate(frames):
+            yolo_boxes = self.detect_frame(frame)
+            box_queue.put(yolo_boxes)
+            for posi_ball_box in yolo_boxes[1]:#get all yolo box
+                x1,y1,x2,y2,conf=posi_ball_box
+                heat_map[max(0,int(y1)-5):min(int(y2)+5,frame_y),max(0,int(x1)-5):min(int(x2)+5,frame_x)]+=1-conf+0.5#5px bloom, the last +0.5 is to offset -0.5 each for frame in frames loop
 
-        history = {}#data from history frames
-        blacklist_areas = []#静止物品的区域
-        ball_pos_log= []
-        max_fixed_itm_radius=10#静止物品相对摄像头的最大浮动像素范围
-        max_fixed_itm_track_frame=30
-        self.frame_mid_pos=[len(frames[0]) / 2, len(frames) / 2, len(frames[0]) / 2, len(frames) / 2]
-        for frame_num, ball_dict in enumerate(ball_detections):
-            ball_pos_log.append(self.detect_ball(frame_num, ball_dict, blacklist_areas, history, ball_pos_log if len(ball_pos_log)>0 else [{1:self.frame_mid_pos}], max_fixed_itm_radius, max_fixed_itm_track_frame))
-        return ball_pos_log
+            if frame_no>30:#warm heat map with 30 frame
+                ball_detections.append(self.pick_box(heat_map,box_queue))
 
-    def detect_ball(self,frame_num, ball_dict, blacklist_areas, history, ball_pos_log, max_fixed_itm_radius, max_fixed_itm_track_frame):
-        fix_itm_flag = 0
-        potential_boxes = ball_dict.get(1, [])  # get all box
-        potential_boxes_sorted = []
-        if not potential_boxes:
-            return {1: []}
-        chosen_box = None
-        # sort box
-        min_dist = float('inf')
-        for box in potential_boxes:
-            # remove box don't move (aka box in banned area)
-            x1, y1, x2, y2, conf = box
-            center = ((x1 + x2) / 2, (y1 + y2) / 2)
-            for bad_center in blacklist_areas:
-                dist = np.linalg.norm(np.array(center) - np.array(bad_center))  # cal dist from cur box to nearest blacklist center
-                if dist < max_fixed_itm_radius:
-                    fix_itm_flag = 1  # mark as fix item (not moving)
-                    break  # skip for bad_center in blacklist_areas:
+            heat_map=heat_map-0.5#heat map cools down
+            heat_map = np.clip(heat_map, 0, 30)#no <0 or >30 (2 sec to cool down a known black area)
 
-            if fix_itm_flag == 1:  # fix item, not ball
-                fix_itm_flag = 0
-                continue
+        while not box_queue.empty():#warm up, so 30 fps behind, handle it
+            ball_detections.append(self.pick_box(heat_map,box_queue))
+        return ball_detections
 
-            # find cid nearest to cur box
-            matched_id = None
-            for cid, points in history.items():
-                last_point = points[-1]
-                dist = np.linalg.norm(np.array(center) - np.array(last_point))
-                if dist < max_fixed_itm_radius:
-                    matched_id = cid
-                    break
+    def pick_box(self,heat_map, box_queue):
+        yolo_hist_boxes = box_queue.get()  # get yolo box 30 frame earlier
+        coolest_temp = 15.00
+        coolest_box = []
+        if yolo_hist_boxes[1] == []:#yolo find no box
+            return []
+        for posi_ball_box in yolo_hist_boxes[1]:
+            x1, y1, x2, y2, conf = posi_ball_box
+            if heat_map[round((y1 + y2) / 2)][
+                round((x1 + x2) / 2)] <= coolest_temp:  # box locate in the coolest pt wins
+                coolest_temp = heat_map[round((y1 + y2) / 2)][round((x1 + x2) / 2)]
+                coolest_box.append([x1, y1, x2, y2, conf])
 
-            # not in any blacklist, handle it
-            if matched_id is None:
-                matched_id = len(history)
-                history[matched_id] = deque(maxlen=max_fixed_itm_track_frame)  # create slot for new obj,only keep latest 30 data
-
-            # add box pos to cid history
-            history[matched_id].append(center)
-
-            # obj reach 30 data, start cal
-            if len(history[matched_id]) >= max_fixed_itm_track_frame:
-                start_pt = np.array(history[matched_id][0])  # load data from start
-                end_pt = np.array(history[matched_id][-1])  # to end
-                total_movement = np.linalg.norm(end_pt - start_pt)  # cal obj move pixel in 1sec, OGLD dist
-                if total_movement < max_fixed_itm_radius:
-                    # not moving! not ball! ban now!
-                    blacklist_areas.append(center)
-                    del history[matched_id]
-                    #re-determine latest 30(or ball_pos_log len if it's smaller) frame ball box, according to new ban rule
-                    for frame_ptr in range(-min(max_fixed_itm_track_frame, len(ball_pos_log)),-1,1):
-                        ball_pos_log[frame_ptr]=self.detect_ball(frame_ptr, ball_dict, blacklist_areas, history, ball_pos_log if len(ball_pos_log)>0 else [{1:self.frame_mid_pos}], max_fixed_itm_radius, max_fixed_itm_track_frame)
-                    continue  # handle other box in potential_boxes now
-
-            potential_boxes_sorted.append(box)  # more possible box with ball after cal
-
-        # box nearest to last box(is ball) is ball
-        ball_box = None
-        for box in potential_boxes_sorted:
-            x1, y1, x2, y2, conf = box
-
-            for last_ball_pos in reversed(ball_pos_log[:frame_num]):#if last frame found no ball box, get it from more early frames
-                if last_ball_pos[1]!=[]:
-                    xx1, yy1, xx2, yy2 = last_ball_pos[1]
-            else :#no valid box from start to end, set value as frame middle pos.
-                xx1, yy1, xx2, yy2 = self.frame_mid_pos
-
-            box_center = np.array([(x1 + x2) / 2, (y1 + y2) / 2])
-            last_ball_center = np.array([(xx1 + xx2) / 2, (yy1 + yy2) / 2])
-            dist = np.linalg.norm(box_center - last_ball_center)
-            if dist < min_dist:
-                min_dist = dist
-                ball_box = box
-
-        current_frame_dict = {1: []}
-        if ball_box is not None:
-            current_frame_dict[1] = ball_box[:4]
-        return current_frame_dict
+        hi_conf = 0
+        hi_conf_box = []
+        if len(coolest_box) > 1:  # if more then 1 box with same temp
+            for posi_ball_box in coolest_box:
+                x1, y1, x2, y2, conf = posi_ball_box
+                if conf > hi_conf:  # take highest conf box
+                    hi_conf = conf#will have same conf?🤔
+                    hi_conf_box=[x1, y1, x2, y2, conf]
+            return hi_conf_box
+        elif len(coolest_box) == 1:
+            return coolest_box[0]
+        else:#find no box(may be temp>15)
+            return []
 
     def detect_frame(self,frame):
         results = self.model.predict(frame,conf=0.15)[0]
@@ -205,16 +153,16 @@ class BallTracker:
         print(bounce_indices)
         return bounce_indices
 
-    def draw_bboxes(self,video_frames, player_detections):
+    def draw_bboxes(self,video_frames, df_player_detections):
         output_video_frames = []
 
+        player_detections = df_player_detections.values.tolist()#conv pandas to lsit
         for frame, ball_dict in zip(video_frames, player_detections):
             # Draw Bounding Boxes
-            for track_id, bbox in ball_dict.items():
-                if bbox !=[]:#have box
-                    x1, y1, x2, y2 = bbox
-                    cv2.putText(frame, f"Ball ID: {track_id}",(int(bbox[0]),int(bbox[1] -10 )),cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
-                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
+            if ball_dict !=[]:#have box
+                x1, y1, x2, y2, conf = ball_dict
+                cv2.putText(frame, f"Conf: {conf:.3f}",(int(x1),int(y1 -10 )),cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
             output_video_frames.append(frame)
         return output_video_frames
 
