@@ -217,6 +217,7 @@ class BallTracker:
             output_video_frames.append(opt_frame)
         return output_video_frames
 
+
     def draw_bboxes_origin (self,video_frames, player_detections):
         output_video_frames=[]
         for frame, ball_dict in zip(video_frames, player_detections):
