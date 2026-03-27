@@ -25,6 +25,7 @@ class BallTracker:
             x1,y1,x2,y2,conf=frame_detections
             processed_positions.append([x1,y1,x2,y2,conf])
 
+        print("processed_positions")
         print(processed_positions)
         # convert the list into pandas dataframe
         df_ball_positions = pd.DataFrame(processed_positions,columns=['x1','y1','x2','y2','conf'])
@@ -78,6 +79,7 @@ class BallTracker:
 
     def detect_frames(self,frames, read_from_stub=False, stub_path=None):
         ball_detections = []
+        kf=kalman_filter()#init kf
 
         if read_from_stub and stub_path is not None:
             with open(stub_path, 'rb') as f:
@@ -95,13 +97,16 @@ class BallTracker:
                 heat_map[max(0,int(y1)-5):min(int(y2)+5,frame_y),max(0,int(x1)-5):min(int(x2)+5,frame_x)]+=1-conf+0.5#5px bloom, the last +0.5 is to offset -0.5 each for frame in frames loop
 
             if frame_no>30:#warm heat map with 30 frame
-                ball_detections.append(self.pick_box(heat_map,box_queue))
+                cur_pick_box=self.pick_box(heat_map,box_queue)
+                ball_detections.append(kf.kalman_filter_func(cur_pick_box))
 
             heat_map=heat_map-0.5#heat map cools down
             heat_map = np.clip(heat_map, 0, 30)#no <0 or >30 (2 sec to cool down a known black area)
 
         while not box_queue.empty():#warm up, so 30 fps behind, handle it
-            ball_detections.append(self.pick_box(heat_map,box_queue))
+            cur_pick_box=self.pick_box(heat_map,box_queue)
+            ball_detections.append(kf.kalman_filter_func(cur_pick_box))
+
         return ball_detections
 
     def pick_box(self,heat_map, box_queue):
@@ -150,6 +155,7 @@ class BallTracker:
         # convert the list into pandas dataframe
         #find bounce
         bounce_indices = argrelextrema(df_ball_positions['y1'].values, np.greater, order=10)[0]#find 局部最大时的帧 in 5 frame around
+        print("bounce_indices")
         print(bounce_indices)
         return bounce_indices
 
@@ -174,3 +180,55 @@ class BallTracker:
                 cv2.putText(cur_frame,"The ball bounced.",(10,620),cv2.FONT_HERSHEY_SIMPLEX, 1.5,(0, 0, 255),3)
             output_video_frames.append(cur_frame)
         return output_video_frames
+
+class kalman_filter:
+    trust_ball_radius=100#if in this area(50px), than box is trust
+    last_ball_mid_pos=[-1,-1]
+
+    def __init__(self):
+        self.kf = cv2.KalmanFilter(4, 2)#4 alg: x,y,dx,dy, 2 opt: x,y
+        self.kf.transitionMatrix = np.array([[1, 0, 1, 0],#new x=x+dx
+                                             [0, 1, 0, 1],
+                                             [0, 0, 1, 0],#new dx=dx
+                                             [0, 0, 0, 1]], np.float32)
+        self.kf.measurementMatrix = np.array([[1, 0, 0, 0],[0, 1, 0, 0]], np.float32)#cares x,y only
+        #过程噪音
+        self.kf.processNoiseCov = np.eye(4, dtype=np.float32) * 1e-3
+        #测量噪音
+        self.kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 1e-2
+        #误差
+        self.kf.errorCovPost = np.eye(4, dtype=np.float32)*1.5#加快收敛
+
+    def update(self, x, y):#update kalman_filter alg
+        measurement = np.array([[np.float32(x)], [np.float32(y)]])
+        self.kf.correct(measurement)#merge with newest x,y
+        smooth_x = self.kf.statePost[0][0]
+        smooth_y = self.kf.statePost[1][0]
+
+        return [smooth_x, smooth_y]
+
+    def kalman_filter_func(self, ball_box_pos):
+        pred = self.kf.predict()#predit ball pos with kalf
+        pred_x = float(pred[0][0])
+        pred_y = float(pred[1][0])
+        trusted_ball = 1
+        if ball_box_pos!=[]:#if yolo find a box
+            x1,y1,x2,y2,conf=ball_box_pos
+            mid_x=(x1+x2)/2
+            mid_y=(y1+y2)/2
+            if self.last_ball_mid_pos!=[-1,-1]  and (self.last_ball_mid_pos[0]-mid_x)**2+(self.last_ball_mid_pos[1]-mid_y)**2>self.trust_ball_radius**2:#the box is toooo far away from last box, than not the bakk
+                trusted_ball=0#box not trusted, go predict
+            else:
+                smooth_pos=self.update(mid_x,mid_y)#upd with got ball pos
+                final_x,final_y=smooth_pos[0],smooth_pos[1]
+                box_h,box_w=x2-x1,y2-y1
+                ball_box_pos_final=[int(final_x-(box_h/2)),int(final_y-(box_w/2)),int(final_x+(box_h/2)),int(final_y+(box_w/2)),conf]
+                self.trust_ball_radius = 100# reset trust radius
+                self.last_ball_mid_pos=[mid_x,mid_y]
+                return ball_box_pos_final
+
+        if ball_box_pos==[] or trusted_ball==0:#find no box, predict it
+            self.trust_ball_radius = self.trust_ball_radius + 30  # time pass, ball may appear anywhere
+            self.last_ball_mid_pos=[pred_x,pred_y]
+            return [pred_x-10,pred_y-10,pred_x+10,pred_y+10,-1]
+
