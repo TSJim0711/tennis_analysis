@@ -182,22 +182,26 @@ class BallTracker:
         return output_video_frames
 
 class kalman_filter:
-    trust_ball_radius=100#if in this area(50px), than box is trust
+    trust_ball_radius=80#if in this area(50px), than box is trust
     last_ball_mid_pos=[-1,-1]
 
     def __init__(self):
-        self.kf = cv2.KalmanFilter(4, 2)#4 alg: x,y,dx,dy, 2 opt: x,y
-        self.kf.transitionMatrix = np.array([[1, 0, 1, 0],#new x=x+dx
-                                             [0, 1, 0, 1],
-                                             [0, 0, 1, 0],#new dx=dx
-                                             [0, 0, 0, 1]], np.float32)
-        self.kf.measurementMatrix = np.array([[1, 0, 0, 0],[0, 1, 0, 0]], np.float32)#cares x,y only
+        self.kf = cv2.KalmanFilter(5, 2)#4 alg: x,y,dx,dy,ddy 2 opt: x,y, ddy aka gravity
+        self.kf.transitionMatrix = np.array([[1, 0, 1, 0, 0],#new x=x+dx
+                                             [0, 1, 0, 1, 1],#new y=y+dy+0。8ddy
+                                             [0, 0, 1, 0, 0],#new dx=dx
+                                             [0, 0, 0, 1, 1],
+                                             [0, 0, 0, 0, 1]], np.float32)
+
+        self.kf.processNoiseCov[4, 4] = 0.3#
+        self.kf.statePost = np.array([0, 0, 0, 0, 0.5], np.float32).reshape(-1, 1)#assum ball gravity 0.4px/frame at first
+        self.kf.measurementMatrix = np.array([[1, 0, 0, 0,0],[0, 1, 0, 0, 0]], np.float32)#cares x,y only
         #过程噪音
-        self.kf.processNoiseCov = np.eye(4, dtype=np.float32) * 1e-3
+        self.kf.processNoiseCov = np.eye(5, dtype=np.float32) * 1e-3
         #测量噪音
         self.kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 1e-2
         #误差
-        self.kf.errorCovPost = np.eye(4, dtype=np.float32)*1.5#加快收敛
+        self.kf.errorCovPost = np.eye(5, dtype=np.float32)*1.5#加快收敛
 
     def update(self, x, y):#update kalman_filter alg
         measurement = np.array([[np.float32(x)], [np.float32(y)]])
@@ -223,7 +227,7 @@ class kalman_filter:
                 final_x,final_y=smooth_pos[0],smooth_pos[1]
                 box_h,box_w=x2-x1,y2-y1
                 ball_box_pos_final=[int(final_x-(box_h/2)),int(final_y-(box_w/2)),int(final_x+(box_h/2)),int(final_y+(box_w/2)),conf]
-                self.trust_ball_radius = 100# reset trust radius
+                self.trust_ball_radius = 80# reset trust radius
                 self.last_ball_mid_pos=[mid_x,mid_y]
                 return ball_box_pos_final
 
